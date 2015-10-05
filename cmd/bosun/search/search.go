@@ -24,16 +24,11 @@ import (
 type Search struct {
 	DataAccess database.DataAccess
 
-	last map[string]*lastInfo
+	// metric -> tags -> struct
+	last map[string]map[string]*database.LastInfo
 
 	indexQueue chan *opentsdb.DataPoint
 	sync.RWMutex
-}
-
-type lastInfo struct {
-	lastVal      float64
-	diffFromPrev float64
-	timestamp    int64
 }
 
 func init() {
@@ -43,7 +38,7 @@ func init() {
 func NewSearch(data database.DataAccess) *Search {
 	s := Search{
 		DataAccess: data,
-		last:       make(map[string]*lastInfo),
+		last:       make(map[string]map[string]*database.LastInfo),
 		indexQueue: make(chan *opentsdb.DataPoint, 300000),
 	}
 	collect.Set("search.index_queue", opentsdb.TagSet{}, func() interface{} { return len(s.indexQueue) })
@@ -54,21 +49,24 @@ func NewSearch(data database.DataAccess) *Search {
 func (s *Search) Index(mdp opentsdb.MultiDataPoint) {
 	for _, dp := range mdp {
 		s.Lock()
-		metric := dp.Metric
-		key := metric + dp.Tags.String()
-		p := s.last[key]
-		if p == nil {
-			p = &lastInfo{}
-			s.last[key] = p
+		mmap := s.last[dp.Metric]
+		if mmap == nil {
+			mmap = make(map[string]*database.LastInfo)
+			s.last[dp.Metric] = mmap
 		}
-		if p.timestamp < dp.Timestamp {
+		p := mmap[dp.Tags.String()]
+		if p == nil {
+			p = &database.LastInfo{}
+			mmap[dp.Tags.String()] = p
+		}
+		if p.Timestamp < dp.Timestamp {
 			if fv, err := getFloat(dp.Value); err == nil {
-				p.diffFromPrev = (fv - p.lastVal) / float64(dp.Timestamp-p.timestamp)
-				p.lastVal = fv
+				p.DiffFromPrev = (fv - p.LastVal) / float64(dp.Timestamp-p.Timestamp)
+				p.LastVal = fv
 			} else {
 				slog.Error(err)
 			}
-			p.timestamp = dp.Timestamp
+			p.Timestamp = dp.Timestamp
 		}
 		s.Unlock()
 		select {
@@ -162,15 +160,17 @@ var errNotFloat = fmt.Errorf("last: expected float64")
 // GetLast returns the value of the most recent data point for the given metric
 // and tag. tags should be of the form "{key=val,key2=val2}". If diff is true,
 // the value is treated as a counter. err is non nil if there is no match.
-func (s *Search) GetLast(metric, tags string, diff bool) (v float64, err error) {
+func (s *Search) GetLast(metric string, tags opentsdb.TagSet, diff bool) (v float64, err error) {
 	s.RLock()
 	defer s.RUnlock()
-	p := s.last[metric+tags]
-	if p != nil {
-		if diff {
-			return p.diffFromPrev, nil
+
+	if mmap := s.last[metric]; mmap != nil {
+		if p := mmap[tags.String()]; p != nil {
+			if diff {
+				return p.DiffFromPrev, nil
+			}
+			return p.LastVal, nil
 		}
-		return p.lastVal, nil
 	}
 	return 0, nil
 }
