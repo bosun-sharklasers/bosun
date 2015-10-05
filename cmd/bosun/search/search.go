@@ -35,6 +35,7 @@ func init() {
 	metadata.AddMetricMeta("bosun.search.index_queue", metadata.Gauge, metadata.Count, "Number of datapoints queued for indexing to redis")
 	metadata.AddMetricMeta("bosun.search.dropped", metadata.Counter, metadata.Count, "Number of datapoints discarded without being saved to redis")
 }
+
 func NewSearch(data database.DataAccess) *Search {
 	s := Search{
 		DataAccess: data,
@@ -42,7 +43,9 @@ func NewSearch(data database.DataAccess) *Search {
 		indexQueue: make(chan *opentsdb.DataPoint, 300000),
 	}
 	collect.Set("search.index_queue", opentsdb.TagSet{}, func() interface{} { return len(s.indexQueue) })
+	s.loadLast()
 	go s.redisIndex(s.indexQueue)
+	go s.BackupLast()
 	return &s
 }
 
@@ -173,6 +176,46 @@ func (s *Search) GetLast(metric string, tags opentsdb.TagSet, diff bool) (v floa
 		}
 	}
 	return 0, nil
+}
+
+// load stored last data from redis
+func (s *Search) loadLast() {
+	s.Lock()
+	defer s.Unlock()
+	slog.Info("Loading last datapoints from redis")
+	m, err := s.DataAccess.Search_LoadLastInfos()
+	if err != nil {
+		slog.Error(err)
+	} else {
+		s.last = m
+	}
+	slog.Info("Done")
+}
+func (s *Search) backupLoop() {
+	for {
+		time.Sleep(2 * time.Minute)
+		err := s.BackupLast()
+		if err != nil {
+			slog.Error(err)
+		}
+	}
+}
+func (s *Search) BackupLast() error {
+	s.RLock()
+	copyL := make(map[string]map[string]*database.LastInfo, len(s.last))
+	for m, mmap := range s.last {
+		innerCopy := make(map[string]*database.LastInfo, len(mmap))
+		copyL[m] = innerCopy
+		for ts, info := range mmap {
+			innerCopy[ts] = &database.LastInfo{
+				LastVal:      info.LastVal,
+				DiffFromPrev: info.DiffFromPrev,
+				Timestamp:    info.Timestamp,
+			}
+		}
+	}
+	s.RUnlock()
+	return s.DataAccess.Search_BackupLastInfos(copyL)
 }
 
 func (s *Search) Expand(q *opentsdb.Query) error {

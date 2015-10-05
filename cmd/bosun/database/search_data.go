@@ -1,12 +1,13 @@
 package database
 
 import (
-	"bosun.org/collect"
-	"bosun.org/opentsdb"
 	"fmt"
 	"strconv"
 
 	"bosun.org/_third_party/github.com/garyburd/redigo/redis"
+	"bosun.org/collect"
+	"bosun.org/opentsdb"
+	"bosun.org/util"
 )
 
 /*
@@ -148,4 +149,34 @@ func (d *dataAccess) Search_GetMetricTagSets(metric string, tags opentsdb.TagSet
 		}
 	}
 	return mtss, nil
+}
+
+func (d *dataAccess) Search_BackupLastInfos(m map[string]map[string]*LastInfo) error {
+	defer collect.StartTimer("redis", opentsdb.TagSet{"op": "BackupLast"})()
+	conn := d.GetConnection()
+	defer conn.Close()
+
+	dat, err := util.MarshalGzipJson(m)
+	if err != nil {
+		return err
+	}
+	_, err = conn.Do("SET", "search:last", dat)
+	return err
+}
+
+func (d *dataAccess) Search_LoadLastInfos() (map[string]map[string]*LastInfo, error) {
+	defer collect.StartTimer("redis", opentsdb.TagSet{"op": "LoadLast"})()
+	conn := d.GetConnection()
+	defer conn.Close()
+
+	b, err := redis.Bytes(conn.Do("GET", "search:last"))
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]map[string]*LastInfo
+	err = util.UnmarshalGzipJson(b, &m)
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
 }

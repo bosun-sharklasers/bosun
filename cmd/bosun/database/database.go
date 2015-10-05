@@ -40,6 +40,9 @@ type DataAccess interface {
 
 	Search_AddMetricTagSet(metric, tagSet string, time int64) error
 	Search_GetMetricTagSets(metric string, tags opentsdb.TagSet) (map[string]int64, error)
+
+	Search_BackupLastInfos(map[string]map[string]*LastInfo) error
+	Search_LoadLastInfos() (map[string]map[string]*LastInfo, error)
 }
 
 type dataAccess struct {
