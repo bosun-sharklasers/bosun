@@ -162,17 +162,17 @@ var errNotFloat = fmt.Errorf("last: expected float64")
 // GetLast returns the value of the most recent data point for the given metric
 // and tag. tags should be of the form "{key=val,key2=val2}". If diff is true,
 // the value is treated as a counter. err is non nil if there is no match.
-func (s *Search) GetLast(metric, tags string, diff bool) (v float64, err error) {
+func (s *Search) GetLast(metric, tags string, diff bool) (v float64, t int64, err error) {
 	s.RLock()
 	defer s.RUnlock()
 	p := s.last[metric+tags]
 	if p != nil {
 		if diff {
-			return p.diffFromPrev, nil
+			return p.diffFromPrev, p.timestamp, nil
 		}
-		return p.lastVal, nil
+		return p.lastVal, p.timestamp, nil
 	}
-	return 0, nil
+	return 0, 0, fmt.Errorf("no match for %s:%s", metric, tags)
 }
 
 func (s *Search) Expand(q *opentsdb.Query) error {
